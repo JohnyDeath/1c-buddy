@@ -291,10 +291,13 @@
     // 9) Strikethrough ~~text~~
     md = md.replace(/~~([^~]+)~~/g, "<del>$1</del>");
 
-    // 10) Bold and italic (prefer ** and __, then _)
-    md = md.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
-    md = md.replace(/__([^_]+)__/g, "<strong>$1</strong>");
-    md = md.replace(/_([^_]+)_/g, "<em>$1</em>");
+     // 10) Bold and italic.
+     // For underscore emphasis, require word boundaries around markers so
+     // identifiers like mcp__tool__Name or snake_case are not parsed as markdown.
+     md = md.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+     md = md.replace(/(?<![\p{L}\p{N}_])__([^_\n]+)__(?![\p{L}\p{N}_])/gu, "<strong>$1</strong>");
+     md = md.replace(/(?<![\p{L}\p{N}_])_([^_\n]+)_(?![\p{L}\p{N}_])/gu, "<em>$1</em>");
+     md = md.replace(/(^|[^\w*])\*([^*\n]+)\*(?!\*)/gm, "$1<em>$2</em>");
 
     // 11) Lists: unordered (*, -) and ordered (1., 2., etc.) with nesting support
     // Process lists before paragraph splitting

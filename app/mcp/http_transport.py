@@ -20,7 +20,7 @@ from .models import (
 )
 from .session import McpSessionStore, validate_origin
 from .handlers import McpHandlers, ToolNotFoundError
-from ..onec_client import OneCApiClient
+from .upstream_tools_client import McpUpstreamToolsClient
 
 router = APIRouter()
 
@@ -34,11 +34,13 @@ def _get_session_store(request: Request) -> McpSessionStore:
     return store
 
 
-def _get_onec_client(request: Request) -> OneCApiClient:
-    client: Optional[OneCApiClient] = getattr(request.app.state, "onec_client", None)
+def _get_mcp_upstream_client(request: Request) -> McpUpstreamToolsClient:
+    client: Optional[McpUpstreamToolsClient] = getattr(
+        request.app.state, "mcp_upstream_client", None
+    )
     if client is None:
-        client = OneCApiClient()
-        request.app.state.onec_client = client
+        client = McpUpstreamToolsClient()
+        request.app.state.mcp_upstream_client = client
     return client
 
 
@@ -111,7 +113,7 @@ async def mcp_endpoint(request: Request, response: Response):
             except Exception:
                 return _jsonrpc_error(req_id, -32602, "Invalid params for initialize")
 
-            handlers = McpHandlers(_get_onec_client(request), store)
+            handlers = McpHandlers(_get_mcp_upstream_client(request), store)
             # Use protocol version from params or default
             result: InitializeResult = await handlers.initialize(params, params.protocolVersion or "")
 
@@ -139,7 +141,7 @@ async def mcp_endpoint(request: Request, response: Response):
             return JSONResponse(status_code=404, content={"error": "Unknown or expired session"})
 
         # Dispatch methods
-        handlers = McpHandlers(_get_onec_client(request), store)
+        handlers = McpHandlers(_get_mcp_upstream_client(request), store)
 
         if method == "initialized":
             if req_id is None:

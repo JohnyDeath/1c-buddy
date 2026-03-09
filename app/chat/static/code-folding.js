@@ -3,8 +3,9 @@
  * Supports both Russian and English syntax for procedures and functions
  */
 class CodeFoldingManager {
-  constructor(contentElement) {
+  constructor(contentElement, onFoldStateChange = null) {
     this.contentElement = contentElement;
+    this.onFoldStateChange = onFoldStateChange;
     this.foldableBlocks = []; // Array of {blockType, startLine, endLine, type, signature, collapsed, element}
     this.foldingState = {}; // Map: lineNumber -> collapsed (boolean)
   }
@@ -989,7 +990,7 @@ class CodeFoldingManager {
         // For procedures/functions: hide body (existing logic)
         bodyStartLine = block.startLine + 1; // After declaration
         bodyEndLine = block.endLine;         // Up to and including КонецПроцедуры/КонецФункции
-        
+
         // Find any empty lines after КонецПроцедуры/КонецФункции
         let lastLineToHide = bodyEndLine;
         while (lastLineToHide + 1 < lines.length && lines[lastLineToHide + 1].trim() === '') {
@@ -997,6 +998,18 @@ class CodeFoldingManager {
         }
         bodyEndLine = lastLineToHide;
       }
+
+      // Store last line index to hide in the gutter.
+      // Depends on whether bodyEndPos includes the \n of bodyEndLine:
+      //   - comment (not at end of file): bodyEndPos = lineStartPositions[bodyEndLine+1]
+      //     → \n IS included → visual lines hidden = bodyEndLine - startLine
+      //     → collapsedEndLine = bodyEndLine
+      //   - procedure/function (or comment at end of file): bodyEndPos excludes that \n
+      //     → the \n stays visible as an empty line → visual lines hidden = bodyEndLine - startLine - 1
+      //     → collapsedEndLine = bodyEndLine - 1
+      block.collapsedEndLine = (block.blockType === 'comment' && bodyEndLine < lines.length - 1)
+        ? bodyEndLine
+        : bodyEndLine - 1;
 
       if (bodyStartLine > bodyEndLine) {
         // No body to hide (empty block or single-line comment)
@@ -1089,6 +1102,7 @@ class CodeFoldingManager {
       block.collapsed = true;
       block.bodyWrapper = bodyWrapper;
       this.foldingState[lineNumber] = true;
+      this.onFoldStateChange?.();
 
       // Update positions of all indicators after collapse
       // Use setTimeout to allow DOM to update first
@@ -1165,8 +1179,10 @@ class CodeFoldingManager {
 
       // Update state
       block.collapsed = false;
+      block.collapsedEndLine = null;
       block.bodyWrapper = null;
       this.foldingState[lineNumber] = false;
+      this.onFoldStateChange?.();
 
       // Update positions of all indicators after expand
       // Use setTimeout to allow DOM to update first

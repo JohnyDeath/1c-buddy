@@ -22,12 +22,85 @@ def sanitize_text(text: str) -> str:
     return "".join(cleaned)
 
 
+def _quote_md(text: str) -> str:
+    """Префиксирует каждую строку символом > для корректного markdown-blockquote."""
+    if not text:
+        return ""
+    return "\n".join("> " + line for line in text.splitlines())
+
+
+def _format_tool_detail(detail: Any) -> str:
+    """Render one response_details item into a readable markdown-friendly string."""
+    if detail is None:
+        return ""
+    if isinstance(detail, str):
+        return detail.strip()
+    if isinstance(detail, (int, float, bool)):
+        return str(detail)
+    if isinstance(detail, list):
+        lines = [_format_tool_detail(item) for item in detail]
+        lines = [line for line in lines if line]
+        return "\n".join(lines)
+    if isinstance(detail, dict):
+        name = str(detail.get("name") or detail.get("title") or detail.get("label") or "").strip()
+        value = detail.get("value")
+        url = str(detail.get("url") or detail.get("href") or "").strip()
+        text = str(detail.get("text") or detail.get("content") or detail.get("description") or "").strip()
+
+        parts = [part for part in (name, text) if part]
+        if value not in (None, ""):
+            parts.append(str(value))
+        if url:
+            parts.append(url)
+
+        if parts:
+            return " | ".join(parts)
+        return json.dumps(detail, ensure_ascii=False)
+
+    return str(detail).strip()
+
+
+def format_openai_tool_call_annotation(tool_call: Dict[str, Any]) -> str:
+    tool_name = tool_call.get("tool_name", "")
+    req_md = tool_call.get("request_markdown", "")
+    return f"\n> 🔧 **{tool_name}**\n{_quote_md(req_md)}\n\n"
+
+
+def format_openai_tool_result_annotation(tool_result: Dict[str, Any]) -> str:
+    tool_name = tool_result.get("tool_name", "")
+    resp_md = (tool_result.get("response_markdown") or "").strip()
+    response_details = tool_result.get("response_details") or []
+
+    lines = [f"> *{tool_name}*:"]
+    if resp_md:
+        quoted = _quote_md(resp_md)
+        if quoted:
+            lines.append(quoted)
+
+    detail_lines = [_format_tool_detail(item) for item in response_details]
+    detail_lines = [line for line in detail_lines if line]
+    if detail_lines:
+        lines.append("> ")
+        lines.append("> Подробности:")
+        lines.extend(f"> - {line}" for line in detail_lines)
+
+    return "\n".join(lines) + "\n\n"
+
+
+def format_openai_tool_followup_annotation(tool_followup: Dict[str, Any]) -> str:
+    text = (tool_followup.get("text") or "").strip()
+    if not text:
+        return ""
+    return f"> {_quote_md(text)[2:]}\n\n"
+
+
 def _chunk_payload(
     chunk_id: str,
     model: str,
     created: int,
     delta_content: Optional[str] = None,
     delta_role: Optional[str] = None,
+    delta_reasoning: Optional[str] = None,
     finish_reason: Optional[str] = None,
 ) -> Dict[str, Any]:
     delta: Dict[str, Any] = {}
@@ -35,6 +108,8 @@ def _chunk_payload(
         delta["role"] = delta_role
     if delta_content is not None:
         delta["content"] = delta_content
+    if delta_reasoning is not None:
+        delta["reasoning_content"] = delta_reasoning
 
     return {
         "id": chunk_id,
@@ -182,8 +257,59 @@ async def openai_stream_from_upstream(
         # Standard OpenAI clients: emit incremental deltas
         prev_raw = ""
         async for update in upstream:
+            # --- Tool call аннотация (вариант B: markdown в контент-поток) ---
+            if "tool_call" in update and not kilocode_mode:
+                annotation = format_openai_tool_call_annotation(update["tool_call"])
+                yield _sse_encode(
+                    _chunk_payload(
+                        chunk_id=request_id,
+                        model=model,
+                        created=created,
+                        delta_content=annotation,
+                    )
+                )
+                continue
+
+            # --- Tool result аннотация ---
+            if "tool_result" in update and not kilocode_mode:
+                annotation = format_openai_tool_result_annotation(update["tool_result"])
+                yield _sse_encode(
+                    _chunk_payload(
+                        chunk_id=request_id,
+                        model=model,
+                        created=created,
+                        delta_content=annotation,
+                    )
+                )
+                continue
+
+            if "tool_followup" in update and not kilocode_mode:
+                annotation = format_openai_tool_followup_annotation(update["tool_followup"])
+                if annotation:
+                    yield _sse_encode(
+                        _chunk_payload(
+                            chunk_id=request_id,
+                            model=model,
+                            created=created,
+                            delta_content=annotation,
+                        )
+                    )
+                continue
+
             raw_text = update.get("text") or ""
             finished = bool(update.get("finished"))
+            reasoning_delta = update.get("reasoning_delta") or ""
+
+            # Emit reasoning chunk before content (standard clients ignore unknown fields)
+            if reasoning_delta:
+                yield _sse_encode(
+                    _chunk_payload(
+                        chunk_id=request_id,
+                        model=model,
+                        created=created,
+                        delta_reasoning=reasoning_delta,
+                    )
+                )
 
             if raw_text:
                 if not prev_raw:
@@ -191,7 +317,6 @@ async def openai_stream_from_upstream(
                 elif raw_text.startswith(prev_raw):
                     delta_raw = raw_text[len(prev_raw):]
                 else:
-                    # Upstream text diverged (restart/rewrite). Emit only the non-overlapping suffix.
                     max_overlap = min(len(prev_raw), len(raw_text))
                     overlap = 0
                     for i in range(max_overlap, 0, -1):

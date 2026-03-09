@@ -51,6 +51,13 @@ async def lifespan(app: FastAPI):
             logger.info("HTTP client closed successfully")
         except Exception as e:
             logger.error(f"Error closing HTTP client: {e}")
+    mcp_client = getattr(app.state, "mcp_upstream_client", None)
+    if mcp_client:
+        try:
+            await mcp_client.close()
+            logger.info("MCP upstream client closed successfully")
+        except Exception as e:
+            logger.error(f"Error closing MCP upstream client: {e}")
 
 app = FastAPI(
     title="Service Gateway for code.1c.ai",

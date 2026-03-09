@@ -713,6 +713,47 @@ main > .composer {
   display: block;
 }
 
+/* Code container: flex row with line numbers gutter + pre */
+.code-container {
+  display: flex;
+  align-items: flex-start;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--text);
+}
+
+.code-container > pre {
+  flex: 1;
+  min-width: 0;
+  font-size: inherit;
+  line-height: inherit;
+  font-family: inherit;
+  color: inherit;
+}
+
+/* Line numbers gutter — fixed on horizontal scroll */
+.line-numbers-gutter {
+  flex-shrink: 0;
+  width: 40px;
+  padding-top: var(--viewer-code-padding);
+  padding-bottom: var(--viewer-code-padding);
+  font-size: inherit;
+  line-height: inherit;
+  font-family: inherit;
+  color: var(--muted);
+  opacity: 0.45;
+  user-select: none;
+  pointer-events: none;
+}
+
+.line-number {
+  display: block;
+  text-align: right;
+  padding-right: 10px;
+  box-sizing: border-box;
+}
+
 
 /* Tables in messages */
 .msg .bubble table {
@@ -1685,6 +1726,7 @@ main > .composer {
   overflow: auto;
   padding: 16px;
   background: var(--bg);
+  --viewer-code-padding: 16px; /* syncs pre padding and gutter padding */
 }
 
 .file-viewer-placeholder {
@@ -1710,14 +1752,11 @@ main > .composer {
 /* File content display */
 .file-viewer-content pre {
   margin: 0;
-  padding: 16px;
+  padding: var(--viewer-code-padding);
   background: rgba(255,255,255,0.04);
   border-radius: 8px;
   overflow-x: auto;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-  font-size: 13px;
-  line-height: 1.4;
-  color: var(--text);
+  /* font-family / font-size / line-height / color inherited from .code-container */
 }
 
 .file-viewer-content pre code {
@@ -2067,3 +2106,204 @@ main > .composer {
   background: rgba(255, 255, 255, 0.3);
 }
 
+
+/* ===================== Reasoning Block ===================== */
+.reasoning-block {
+  margin-bottom: 0.75rem;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.025);
+  overflow: hidden;
+}
+
+.reasoning-block summary {
+  padding: 6px 12px;
+  cursor: pointer;
+  font-size: 0.8rem;
+  color: var(--muted);
+  user-select: none;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: background 0.15s;
+}
+
+.reasoning-block summary::-webkit-details-marker {
+  display: none;
+}
+
+.reasoning-block summary::before {
+  content: "▶";
+  font-size: 0.65rem;
+  opacity: 0.7;
+  transition: transform 0.2s;
+  display: inline-block;
+}
+
+.reasoning-block[open] summary::before {
+  transform: rotate(90deg);
+}
+
+.reasoning-block summary:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.reasoning-block .reasoning-content {
+  padding: 8px 14px 10px;
+  font-size: 0.78rem;
+  line-height: 1.5;
+  color: rgba(170, 178, 192, 0.85);
+  white-space: pre-wrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Courier New", monospace;
+  max-height: 280px;
+  overflow-y: auto;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  word-break: break-word;
+}
+
+.reasoning-block .reasoning-content::-webkit-scrollbar {
+  width: 4px;
+}
+
+.reasoning-block .reasoning-content::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.reasoning-block .reasoning-content::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 4px;
+}
+
+/* ===================== Tool Call Blocks ===================== */
+.tool-call-block {
+  margin-bottom: 0.75rem;
+  border: 1px solid rgba(75, 163, 255, 0.15);
+  border-radius: 8px;
+  background: rgba(75, 163, 255, 0.03);
+  overflow: hidden;
+}
+
+.tool-call-block summary {
+  padding: 6px 12px;
+  cursor: pointer;
+  font-size: 0.8rem;
+  color: rgba(100, 180, 255, 0.85);
+  user-select: none;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: background 0.15s;
+}
+
+.tool-call-block summary::-webkit-details-marker {
+  display: none;
+}
+
+.tool-call-block summary::before {
+  content: "▶";
+  font-size: 0.65rem;
+  opacity: 0.7;
+  transition: transform 0.2s;
+  display: inline-block;
+}
+
+.tool-call-block[open] summary::before {
+  transform: rotate(90deg);
+}
+
+.tool-call-block summary:hover {
+  background: rgba(75, 163, 255, 0.06);
+}
+
+.tool-call-block .tool-request {
+  padding: 6px 14px 8px;
+  font-size: 0.78rem;
+  line-height: 1.5;
+  color: rgba(170, 178, 192, 0.75);
+  border-top: 1px solid rgba(75, 163, 255, 0.08);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.tool-call-block .tool-request p { margin: 0 0 0.35em; }
+.tool-call-block .tool-request p:first-child { margin-top: 0; }
+.tool-call-block .tool-request p:last-child  { margin-bottom: 0; }
+.tool-call-block .tool-request p + ul,
+.tool-call-block .tool-request p + ol { margin-top: 0; }
+
+.tool-call-block .tool-result-placeholder {
+  padding: 6px 14px 8px;
+  font-size: 0.78rem;
+  color: var(--muted);
+  font-style: italic;
+  border-top: 1px solid rgba(75, 163, 255, 0.06);
+}
+
+.tool-call-block .tool-result {
+  padding: 6px 14px 8px;
+  font-size: 0.78rem;
+  line-height: 1.5;
+  color: rgba(150, 210, 150, 0.85);
+  border-top: 1px solid rgba(75, 163, 255, 0.08);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.tool-call-block .tool-result p:first-child { margin-top: 0; }
+.tool-call-block .tool-result p:last-child  { margin-bottom: 0; }
+
+.tool-call-block .tool-followup {
+  padding: 8px 14px 10px;
+  font-size: 0.79rem;
+  line-height: 1.55;
+  color: rgba(214, 222, 235, 0.9);
+  border-top: 1px dashed rgba(75, 163, 255, 0.12);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.tool-call-block .tool-followup p:first-child { margin-top: 0; }
+.tool-call-block .tool-followup p:last-child  { margin-bottom: 0; }
+
+.tool-call-block .tool-request a,
+.tool-call-block .tool-result a,
+.tool-call-block .tool-followup a,
+.tool-result-details-list a {
+  color: #8fc6ff;
+  text-decoration: none;
+  border-bottom: 1px dotted rgba(143, 198, 255, 0.6);
+}
+
+.tool-call-block .tool-request a:hover,
+.tool-call-block .tool-result a:hover,
+.tool-call-block .tool-followup a:hover,
+.tool-result-details-list a:hover {
+  color: #b6ddff;
+  text-decoration: underline;
+}
+
+/* Вложенный список подробностей */
+.tool-result-details {
+  margin: 4px 14px 8px;
+  border: 1px solid rgba(75, 163, 255, 0.1);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.tool-result-details summary {
+  padding: 4px 10px;
+  cursor: pointer;
+  font-size: 0.75rem;
+  color: var(--muted);
+  user-select: none;
+}
+
+.tool-result-details-list {
+  margin: 0;
+  padding: 4px 10px 6px 28px;
+  font-size: 0.75rem;
+  color: rgba(170, 178, 192, 0.7);
+  line-height: 1.6;
+}

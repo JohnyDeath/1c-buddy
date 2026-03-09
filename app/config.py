@@ -38,6 +38,11 @@ class Settings(BaseSettings):
     # MCP tools input limits
     MCP_TOOL_INPUT_MIN_LENGTH: int = Field(4, alias="MCP_TOOL_INPUT_MIN_LENGTH")
     MCP_TOOL_INPUT_MAX_LENGTH: int = Field(100000, alias="MCP_TOOL_INPUT_MAX_LENGTH")
+    MCP_TOOL_CALL_MODE: str = Field(
+        "direct",
+        alias="MCP_TOOL_CALL_MODE",
+        description="How MCP tools call upstream: standard prompt flow or direct exact tool calls",
+    )
 
     # Global input length limit for upstream server (applies to all services: chat, OpenAI API, MCP)
     ONEC_AI_INPUT_MAX_LENGTH: int = Field(100000, alias="ONEC_AI_INPUT_MAX_LENGTH")

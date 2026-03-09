@@ -15,6 +15,7 @@ from ..onec_models import ApiError, ConversationSession
 from ..token_counter import count_tokens
 from ..config import get_settings
 from ..text_utils import prepare_message_for_upstream
+from ..errors import map_api_error, map_generic_error
 
 logger = logging.getLogger(__name__)
 
@@ -90,15 +91,9 @@ async def chat_send(request: Request, body: SendRequest):
             "answer": sanitize_text(answer or ""),
         }
     except ApiError as e:
-        return JSONResponse(
-            status_code=502,
-            content={"error": {"message": e.message, "status_code": e.status_code}},
-        )
+        return map_api_error(e)
     except Exception as e:
-        return JSONResponse(
-            status_code=500,
-            content={"error": {"message": "Internal server error"}},
-        )
+        return map_generic_error(e)
 
 
 def _sse_event(event: str, data: Dict[str, Any]) -> bytes:
@@ -166,17 +161,38 @@ async def chat_stream(
             prev_raw = ""
             current_message_id = None
             async for update in client.iter_message_stream(conv_id, prepared_message, body.parent_uuid):
+                # --- Tool call начался ---
+                if "tool_call" in update:
+                    yield _sse_event("tool_call", update["tool_call"])
+                    continue
+
+                # --- Tool result получен ---
+                if "tool_result" in update:
+                    yield _sse_event("tool_result", update["tool_result"])
+                    continue
+
+                # --- Промежуточный текст после результата инструмента ---
+                if "tool_followup" in update:
+                    yield _sse_event("tool_followup", update["tool_followup"])
+                    continue
+
                 raw_text = update.get("text") or ""
                 finished = bool(update.get("finished"))
                 message_id = update.get("message_id")
+                reasoning_delta = update.get("reasoning_delta") or ""
 
-                # Store message_id for feedback functionality
-                if message_id and not current_message_id:
+                # Keep the last assistant UUID so the next turn uses the latest parent.
+                if message_id:
                     current_message_id = message_id
+
+                # Отправляем reasoning-дельту ПЕРЕД основным текстом
+                if reasoning_delta:
+                    yield _sse_event("reasoning", {"text": reasoning_delta})
 
                 # Skip if unchanged
                 if raw_text == prev_raw:
                     continue
+
 
                 # Calculate delta from RAW text (already cleaned by onec_client)
                 if not prev_raw:
@@ -251,13 +267,7 @@ async def chat_feedback(request: Request, body: FeedbackRequest):
         return {"success": True, "message_id": body.message_id, "score": body.score}
     except ApiError as e:
         logger.error(f"Feedback API error: {e.message}")
-        return JSONResponse(
-            status_code=502,
-            content={"error": {"message": e.message, "status_code": e.status_code}},
-        )
+        return map_api_error(e)
     except Exception as e:
         logger.error(f"Unexpected feedback error: {str(e)}")
-        return JSONResponse(
-            status_code=500,
-            content={"error": {"message": "Internal server error"}},
-        )
+        return map_generic_error(e)

@@ -16,7 +16,13 @@ from .openai_models import (
     ChatMessageResponse,
     Usage,
 )
-from .streaming import sanitize_text, openai_stream_from_upstream
+from .streaming import (
+    sanitize_text,
+    openai_stream_from_upstream,
+    format_openai_tool_call_annotation,
+    format_openai_tool_result_annotation,
+    format_openai_tool_followup_annotation,
+)
 from .onec_client import OneCApiClient
 from .errors import error_response, map_api_error, map_generic_error
 from .onec_models import ApiError
@@ -70,34 +76,60 @@ async def list_models(request: Request):
     )
 
 
-def _extract_instruction(body: ChatCompletionsRequest) -> Optional[str]:
+def _content_to_text(content: Any) -> str:
     # Convert OpenAI content (string or array-of-parts) into plain text
-    def to_text(content: Any) -> str:
-        if content is None:
-            return ""
-        if isinstance(content, str):
-            return content
-        if isinstance(content, list):
-            parts: list[str] = []
-            for item in content:
-                if isinstance(item, str):
-                    parts.append(item)
-                elif isinstance(item, dict):
-                    # OpenAI content part: prefer 'text'
-                    t = item.get("text")
-                    if isinstance(t, str):
-                        parts.append(t)
-                else:
-                    parts.append(str(item))
-            return "\n".join([p for p in parts if p])
-        # Fallback for unexpected types
-        return str(content)
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                # OpenAI content part: prefer 'text'
+                t = item.get("text")
+                if isinstance(t, str):
+                    parts.append(t)
+            else:
+                parts.append(str(item))
+        return "\n".join([p for p in parts if p])
+    # Fallback for unexpected types
+    return str(content)
 
-    system_parts = [to_text(m.content) for m in body.messages if m.role == "system"]
-    user_msgs = [to_text(m.content) for m in body.messages if m.role == "user"]
+
+def _extract_instruction(
+    body: ChatCompletionsRequest,
+    *,
+    use_session_history: bool,
+) -> Optional[str]:
+    system_parts = [_content_to_text(m.content) for m in body.messages if m.role == "system"]
+    user_msgs = [_content_to_text(m.content) for m in body.messages if m.role == "user"]
 
     if not user_msgs:
         return None
+
+    if not use_session_history:
+        transcript_lines: list[str] = []
+        for message in body.messages:
+            text = (_content_to_text(message.content) or "").strip()
+            if not text:
+                continue
+            role_label = {
+                "system": "System",
+                "user": "User",
+                "assistant": "Assistant",
+            }.get(message.role, message.role.title())
+            transcript_lines.append(f"{role_label}:\n{text}")
+
+        if not transcript_lines:
+            return None
+
+        return (
+            "Use the full conversation context below and answer the last user message.\n\n"
+            + "\n\n".join(transcript_lines)
+        )
 
     user_last = (user_msgs[-1] or "").strip()
     preface = "\n\n".join([p for p in system_parts if (p or "").strip()]).strip()
@@ -184,6 +216,37 @@ def _ensure_openai_tool_contract(text: str) -> str:
         return text
 
 
+async def _collect_openai_response_text(
+    client: OneCApiClient,
+    conversation_id: str,
+    instruction: str,
+) -> str:
+    blocks: list[str] = []
+    final_text = ""
+
+    async for update in client.iter_message_stream(conversation_id, instruction):
+        if "tool_call" in update:
+            blocks.append(format_openai_tool_call_annotation(update["tool_call"]).strip())
+            continue
+        if "tool_result" in update:
+            blocks.append(format_openai_tool_result_annotation(update["tool_result"]).strip())
+            continue
+        if "tool_followup" in update:
+            annotation = format_openai_tool_followup_annotation(update["tool_followup"]).strip()
+            if annotation:
+                blocks.append(annotation)
+            continue
+
+        text = (update.get("text") or "").strip()
+        if text:
+            final_text = text
+
+    if final_text:
+        blocks.append(final_text)
+
+    return "\n\n".join(part for part in blocks if part).strip()
+
+
 @router.post("/v1/chat/completions")
 async def chat_completions(request: Request, body: ChatCompletionsRequest, response: Response):
     if (resp := _auth_guard(request)) is not None:
@@ -193,7 +256,13 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest, respo
     client = _get_client(request)
     model_id = body.model or settings.PUBLIC_MODEL_ID
 
-    instruction = _extract_instruction(body)
+    meta = _extract_metadata(body, request)
+    conversation_id: Optional[str] = meta["conversation_id"]
+    create_new_session: bool = meta["create_new_session"]
+    programming_language: Optional[str] = meta["programming_language"]
+    use_session_history = bool(conversation_id) and not create_new_session
+
+    instruction = _extract_instruction(body, use_session_history=use_session_history)
     if not instruction:
         return error_response("messages must include at least one user message", "invalid_request_error", 400)
 
@@ -203,11 +272,6 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest, respo
         logger.warning(
             f"OpenAI API message truncated from {len(instruction)} to {len(prepared_instruction)} characters"
         )
-
-    meta = _extract_metadata(body, request)
-    conversation_id: Optional[str] = meta["conversation_id"]
-    create_new_session: bool = meta["create_new_session"]
-    programming_language: Optional[str] = meta["programming_language"]
 
     try:
         # Determine conversation to use
@@ -260,7 +324,11 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest, respo
             )
 
         # Non-stream path
-        final_text = await client.send_message_full(conversation_id, prepared_instruction)
+        final_text = await _collect_openai_response_text(
+            client,
+            conversation_id,
+            prepared_instruction,
+        )
         final_text = sanitize_text(final_text)
 
         # Apply KiloCode XML wrapping only for KiloCode clients

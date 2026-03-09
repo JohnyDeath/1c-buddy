@@ -26,7 +26,7 @@ class MessageContentInner(BaseModel):
 class MessageContentOuter(BaseModel):
     """Outer content structure for message."""
     content: MessageContentInner
-    tools: Optional[Any] = None
+    tools: list = Field(default_factory=list)
 
 
 class MessageRequest(BaseModel):
@@ -41,7 +41,7 @@ class MessageRequest(BaseModel):
         return cls(
             content=MessageContentOuter(
                 content=MessageContentInner(instruction=instruction),
-                tools=None
+                # tools не передаём явно — возьмётся дефолт []
             ),
             parent_uuid=parent_uuid,
             role="user"
@@ -63,6 +63,7 @@ class MessageChunk(BaseModel):
     content_delta: Optional[ContentDelta] = None
     parent_uuid: Optional[str] = None
     finished: bool = False
+    render_info: Optional[Any] = None
 
 
 class ConversationSession(BaseModel):
@@ -71,6 +72,7 @@ class ConversationSession(BaseModel):
     created_at: datetime = Field(default_factory=datetime.now)
     last_used: datetime = Field(default_factory=datetime.now)
     messages_count: int = 0
+    last_message_uuid: Optional[str] = None  # uuid последнего ответа ассистента
 
 
 # Добавляем метод ПОСЛЕ определения класса, чтобы Pydantic его не видел при инициализации
@@ -88,3 +90,25 @@ class ApiError(Exception):
         self.message = message
         self.status_code = status_code
         super().__init__(self.message)
+
+
+class ToolCallItem(BaseModel):
+    """Один вызов инструмента из content.tool_calls."""
+    id: str
+    type: str = "function"
+    function: Dict[str, Any]
+
+
+class ToolResultItem(BaseModel):
+    """Элемент tool result POST body."""
+    content: str  # JSON-строка самого tool call
+    details: Dict[str, Any] = Field(default_factory=lambda: {"auto_call": True})
+    name: str
+    tool_call_id: str
+
+
+class ToolResultRequest(BaseModel):
+    """POST body для отправки результата tool call upstream."""
+    role: str = "tool"
+    parent_uuid: str
+    content: List[ToolResultItem]

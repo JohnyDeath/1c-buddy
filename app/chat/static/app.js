@@ -36,6 +36,20 @@
 
   const HISTORY_LIMIT = 500;
 
+  function closeAllTokenTooltips(exceptTooltip = null) {
+    document.querySelectorAll(".token-tooltip.visible").forEach((tooltip) => {
+      if (tooltip !== exceptTooltip) {
+        tooltip.classList.remove("visible");
+      }
+    });
+  }
+
+  document.addEventListener("click", (e) => {
+    if (!e.target.closest(".token-btn") && !e.target.closest(".token-tooltip")) {
+      closeAllTokenTooltips();
+    }
+  });
+
   // Token accumulation for current conversation
   let totalInputTokens = 0;
   let totalOutputTokens = 0;
@@ -327,7 +341,7 @@
     chatEl.innerHTML = "";
     currentAssistantBubble = null;
     for (const m of arr) {
-      appendMessage(m.role, m.text, false, m.ts, m.tokens, m.files, m.message_id, m.feedback_score);
+      appendMessage(m.role, m.text, false, m.ts, m.tokens, m.files, m.message_id, m.feedback_score, m.reasoning, m.tool_calls);
     }
   }
 
@@ -464,7 +478,7 @@
     }
   }
 
-  function appendMessage(role, text, append = false, ts = null, tokens = null, files = null, messageId = null, feedbackScore = null) {
+  function appendMessage(role, text, append = false, ts = null, tokens = null, files = null, messageId = null, feedbackScore = null, reasoning = null, toolCalls = null) {
     let bubbleWrap = null;
     let createdNow = false;
 
@@ -566,14 +580,9 @@
 
         tokenBtn.addEventListener("click", (e) => {
           e.stopPropagation();
-          tokenTooltip.classList.toggle("visible");
-        });
-
-        // Close tooltip when clicking outside
-        document.addEventListener("click", (e) => {
-          if (!tokenBtn.contains(e.target) && !tokenTooltip.contains(e.target)) {
-            tokenTooltip.classList.remove("visible");
-          }
+          const willOpen = !tokenTooltip.classList.contains("visible");
+          closeAllTokenTooltips(tokenTooltip);
+          tokenTooltip.classList.toggle("visible", willOpen);
         });
 
         bubble.appendChild(tokenBtn);
@@ -644,6 +653,24 @@
       chatEl.appendChild(bubbleWrap);
       if (role === "assistant") currentAssistantBubble = bubbleWrap;
       createdNow = true;
+
+      // Восстанавливаем блок рассуждений из истории (в свёрнутом виде)
+      if (role === "assistant" && reasoning) {
+        _renderReasoningBlock(bubbleWrap, reasoning, false);
+      }
+
+      // Восстанавливаем tool-блоки из истории (в свёрнутом виде)
+      if (role === "assistant" && toolCalls && toolCalls.length > 0) {
+        for (const tc of toolCalls) {
+          _renderToolCallBlock(bubbleWrap, tc.tool_call_id, tc.tool_name, tc.request_markdown, false);
+          if (tc.response_markdown) {
+            _updateToolResultBlock(bubbleWrap, tc.tool_call_id, tc.response_markdown, tc.response_details || [], false);
+          }
+          if (tc.followup_markdown) {
+            _updateToolFollowupBlock(bubbleWrap, tc.tool_call_id, tc.followup_markdown);
+          }
+        }
+      }
     }
 
     const bubble = bubbleWrap.querySelector(".bubble");
@@ -820,6 +847,171 @@
     }
 
     chatEl.scrollTop = chatEl.scrollHeight;
+  }
+
+  // ================== Tool Calls UI ==================
+
+  function decodeHtmlEntities(text) {
+    const textarea = document.createElement("textarea");
+    textarea.innerHTML = text || "";
+    return textarea.value || "";
+  }
+
+  function renderMarkdownFragment(target, rawText) {
+    const text = decodeHtmlEntities(rawText || "").replace(/\u00a0+/g, " ");
+    if (window.Markdown && typeof window.Markdown.render === "function") {
+      target.innerHTML = window.Markdown.render(text);
+      if (window.BSL && typeof window.BSL.highlightAll === "function") {
+        try {
+          window.BSL.highlightAll(target, { autodetect: true, inline: true });
+        } catch (_) {}
+      }
+      if (window.XML && typeof window.XML.highlightAll === "function") {
+        try {
+          window.XML.highlightAll(target, { autodetect: true, inline: true });
+        } catch (_) {}
+      }
+      renderMermaidDiagrams(target);
+    } else {
+      target.textContent = text;
+    }
+  }
+
+  /** Создаёт блок "🔧 ToolName ⏳" в bubble ассистента. Обновляет dataset.toolCalls. */
+  function appendToolCall(id, toolName, requestMd) {
+    // Создаём bubble если нет
+    if (!currentAssistantBubble) {
+      appendMessage("assistant", "", false);
+    }
+    _renderToolCallBlock(currentAssistantBubble, id, toolName, requestMd, true);
+    // Обновляем dataset
+    const existing = JSON.parse(currentAssistantBubble.dataset.toolCalls || "[]");
+    existing.push({ tool_call_id: id, tool_name: toolName, request_markdown: requestMd });
+    currentAssistantBubble.dataset.toolCalls = JSON.stringify(existing);
+    chatEl.scrollTop = chatEl.scrollHeight;
+  }
+
+  /** Обновляет блок результата инструмента. Обновляет dataset.toolCalls. */
+  function updateToolResult(id, responseMd, responseDetails, hideAfter) {
+    if (!currentAssistantBubble) return;
+    _updateToolResultBlock(currentAssistantBubble, id, responseMd, responseDetails || [], hideAfter);
+    // Обновляем dataset
+    const existing = JSON.parse(currentAssistantBubble.dataset.toolCalls || "[]");
+    const entry = existing.find(e => e.tool_call_id === id);
+    if (entry) {
+      entry.response_markdown = responseMd;
+      entry.response_details = responseDetails || [];
+      entry.hide_after = hideAfter;
+    }
+    currentAssistantBubble.dataset.toolCalls = JSON.stringify(existing);
+  }
+
+  /** Обновляет промежуточный текст модели, относящийся к уже выполненному tool-step. */
+  function updateToolFollowup(id, followupMd) {
+    if (!currentAssistantBubble) return;
+    _updateToolFollowupBlock(currentAssistantBubble, id, followupMd || "");
+    const existing = JSON.parse(currentAssistantBubble.dataset.toolCalls || "[]");
+    const entry = existing.find(e => e.tool_call_id === id);
+    if (entry) {
+      entry.followup_markdown = followupMd || "";
+    }
+    currentAssistantBubble.dataset.toolCalls = JSON.stringify(existing);
+  }
+
+  /** Создаёт/обновляет <details class="tool-call-block"> внутри bubbleWrap. */
+  function _renderToolCallBlock(bubbleWrap, id, toolName, requestMd, isOpen) {
+    const bubble = bubbleWrap.querySelector(".bubble");
+    if (!bubble) return;
+    const content = bubble.querySelector(".content");
+
+    let block = bubbleWrap.querySelector(`.tool-call-block[data-tool-call-id="${CSS.escape(id)}"]`);
+    if (!block) {
+      block = document.createElement("details");
+      block.className = "tool-call-block";
+      block.dataset.toolCallId = id;
+      if (isOpen) block.setAttribute("open", "");
+
+      const summary = document.createElement("summary");
+      summary.textContent = "🔧 " + (toolName || "Tool");
+      block.appendChild(summary);
+
+      const reqDiv = document.createElement("div");
+      reqDiv.className = "tool-request";
+      renderMarkdownFragment(reqDiv, requestMd);
+      block.appendChild(reqDiv);
+
+      const placeholder = document.createElement("div");
+      placeholder.className = "tool-result-placeholder";
+      placeholder.textContent = "⏳ Ожидание результата...";
+      block.appendChild(placeholder);
+
+      // Вставляем перед .content (как reasoning)
+      if (content) {
+        bubble.insertBefore(block, content);
+      } else {
+        bubble.appendChild(block);
+      }
+    }
+  }
+
+  /** Заменяет placeholder результатом и опционально схлопывает блок. */
+  function _updateToolResultBlock(bubbleWrap, id, responseMd, responseDetails, hideAfter) {
+    const block = bubbleWrap.querySelector(`.tool-call-block[data-tool-call-id="${CSS.escape(id)}"]`);
+    if (!block) return;
+
+    const placeholder = block.querySelector(".tool-result-placeholder");
+    if (placeholder) placeholder.remove();
+
+    // Убираем старый результат если есть
+    const oldResult = block.querySelector(".tool-result");
+    if (oldResult) oldResult.remove();
+
+    const resultDiv = document.createElement("div");
+    resultDiv.className = "tool-result";
+    renderMarkdownFragment(resultDiv, responseMd || "✓");
+    block.appendChild(resultDiv);
+
+    // response_details — вложенный раскрывающийся список
+    if (responseDetails && responseDetails.length > 0) {
+      const oldDetails = block.querySelector(".tool-result-details");
+      if (oldDetails) oldDetails.remove();
+      const detailsEl = document.createElement("details");
+      detailsEl.className = "tool-result-details";
+      const detailsSummary = document.createElement("summary");
+      detailsSummary.textContent = `Подробности (${responseDetails.length})`;
+      detailsEl.appendChild(detailsSummary);
+      const list = document.createElement("ul");
+      list.className = "tool-result-details-list";
+      for (const item of responseDetails) {
+        const li = document.createElement("li");
+        if (typeof item === "string") {
+          const itemBody = document.createElement("div");
+          renderMarkdownFragment(itemBody, item);
+          li.appendChild(itemBody);
+        } else {
+          li.textContent = JSON.stringify(item);
+        }
+        list.appendChild(li);
+      }
+      detailsEl.appendChild(list);
+      block.appendChild(detailsEl);
+    }
+
+    if (hideAfter) block.removeAttribute("open");
+  }
+
+  /** Показывает текст модели после результата инструмента внутри того же tool-блока. */
+  function _updateToolFollowupBlock(bubbleWrap, id, followupMd) {
+    const block = bubbleWrap.querySelector(`.tool-call-block[data-tool-call-id="${CSS.escape(id)}"]`);
+    if (!block) return;
+
+    const oldFollowup = block.querySelector(".tool-followup");
+    if (oldFollowup) oldFollowup.remove();
+
+    const followupDiv = document.createElement("div");
+    followupDiv.className = "tool-followup";
+    renderMarkdownFragment(followupDiv, followupMd || "");
+    block.appendChild(followupDiv);
   }
 
   // Helper function to format file size
@@ -1269,6 +1461,51 @@
     }
   }
 
+  // Creates a reasoning block inside bubbleWrap and fills it with text
+  function _renderReasoningBlock(bubbleWrap, text, open = true) {
+    const bubble = bubbleWrap.querySelector(".bubble");
+    if (!bubble) return;
+    let block = bubbleWrap.querySelector(".reasoning-block");
+    if (!block) {
+      block = document.createElement("details");
+      block.className = "reasoning-block";
+      const summary = document.createElement("summary");
+      summary.textContent = "🤔 Рассуждения";
+      const rc = document.createElement("div");
+      rc.className = "reasoning-content";
+      block.appendChild(summary);
+      block.appendChild(rc);
+      // Insert before .content
+      const content = bubble.querySelector(".content");
+      bubble.insertBefore(block, content);
+    }
+    if (open) block.setAttribute("open", "");
+    else block.removeAttribute("open");
+    const rc = block.querySelector(".reasoning-content");
+    if (rc) rc.textContent = text;
+    return block;
+  }
+
+  // Appends reasoning delta in real time during streaming
+  function appendReasoning(delta) {
+    if (!delta) return;
+
+    // Create assistant bubble if it doesn't exist yet:
+    // reasoning-chunks arrive before the first text-delta
+    if (!currentAssistantBubble) {
+      appendMessage("assistant", "", false);
+    }
+
+    // Accumulate in dataset for saving to history
+    const prev = currentAssistantBubble.dataset.reasoning || "";
+    currentAssistantBubble.dataset.reasoning = prev + delta;
+
+    // Find or create the block — accumulate already collected text
+    const block = _renderReasoningBlock(currentAssistantBubble, currentAssistantBubble.dataset.reasoning, true);
+    const rc = block ? block.querySelector(".reasoning-content") : null;
+    if (rc) rc.scrollTop = rc.scrollHeight;
+  }
+
   async function startStream(message) {
 
     // Find last assistant message to get parent_uuid
@@ -1407,6 +1644,34 @@
       } catch (_) {}
     });
 
+    es.addEventListener("reasoning", (ev) => {
+      try {
+        const d = JSON.parse(ev.data);
+        appendReasoning(d.text || "");
+      } catch (_) {}
+    });
+
+    es.addEventListener("tool_call", (ev) => {
+      try {
+        const d = JSON.parse(ev.data);
+        appendToolCall(d.tool_call_id, d.tool_name, d.request_markdown);
+      } catch (_) {}
+    });
+
+    es.addEventListener("tool_result", (ev) => {
+      try {
+        const d = JSON.parse(ev.data);
+        updateToolResult(d.tool_call_id, d.response_markdown, d.response_details || [], d.hide_after);
+      } catch (_) {}
+    });
+
+    es.addEventListener("tool_followup", (ev) => {
+      try {
+        const d = JSON.parse(ev.data);
+        updateToolFollowup(d.tool_call_id, d.text || "");
+      } catch (_) {}
+    });
+
     es.addEventListener("tokens", (ev) => {
       try {
         const d = JSON.parse(ev.data);
@@ -1469,9 +1734,20 @@
           const messageId = currentAssistantBubble.dataset.messageId;
           const feedbackScore = currentAssistantBubble.dataset.feedbackScore;
 
+          // Collapse reasoning and tool-call blocks after stream completes
+          if (currentAssistantBubble) {
+            const rb = currentAssistantBubble.querySelector(".reasoning-block");
+            if (rb) rb.removeAttribute("open");
+            currentAssistantBubble.querySelectorAll(".tool-call-block").forEach(b => b.removeAttribute("open"));
+          }
+
+          const toolCalls = JSON.parse(currentAssistantBubble ? (currentAssistantBubble.dataset.toolCalls || "[]") : "[]");
+
           saveMessageToHistory({
             role: "assistant",
             text: finalText,
+            reasoning: currentAssistantBubble ? (currentAssistantBubble.dataset.reasoning || "") : "",
+            tool_calls: toolCalls,
             ts: ts3,
             convId,
             tokens: tokens,
@@ -2924,6 +3200,15 @@ class FileViewer {
       this.updateSearchUI();
     }
 
+    // Create wrapper for flex layout (gutter + pre)
+    const wrapper = document.createElement('div');
+    wrapper.className = 'code-container';
+
+    // Create line numbers gutter
+    const lineGutter = document.createElement('div');
+    lineGutter.className = 'line-numbers-gutter';
+    lineGutter.setAttribute('aria-hidden', 'true');
+
     // Create pre and code elements
     const pre = document.createElement('pre');
     const code = document.createElement('code');
@@ -2941,10 +3226,22 @@ class FileViewer {
     // Normalize line endings (convert \r\n to \n, remove standalone \r)
     const normalizedContent = content.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
 
+    // Populate line numbers gutter
+    const lineCount = normalizedContent.split('\n').length;
+    for (let i = 1; i <= lineCount; i++) {
+      const span = document.createElement('span');
+      span.className = 'line-number';
+      span.textContent = i;
+      lineGutter.appendChild(span);
+    }
+
     // Set text content
     code.textContent = normalizedContent;
     pre.appendChild(code);
-    this.contentEl.appendChild(pre);
+
+    wrapper.appendChild(lineGutter);
+    wrapper.appendChild(pre);
+    this.contentEl.appendChild(wrapper);
 
     // Apply syntax highlighting
     if (language === '1c' && window.BSL && typeof window.BSL.highlightAll === 'function') {
@@ -2990,11 +3287,14 @@ class FileViewer {
       }
 
       // Create new instance
-      this.codeFoldingManager = new CodeFoldingManager(this.contentEl);
+      this.codeFoldingManager = new CodeFoldingManager(
+        this.contentEl,
+        () => this.updateLineNumbersGutter()
+      );
 
       // Parse procedures and functions
       const blocks = this.codeFoldingManager.parseProceduresAndFunctions();
-      
+
       if (blocks.length === 0) {
         // No foldable blocks found, cleanup and return
         this.codeFoldingManager = null;
@@ -3053,7 +3353,10 @@ class FileViewer {
       }
 
       // Create new instance
-      this.codeFoldingManager = new CodeFoldingManager(this.contentEl);
+      this.codeFoldingManager = new CodeFoldingManager(
+        this.contentEl,
+        () => this.updateLineNumbersGutter()
+      );
 
       // Parse procedures and functions
       const blocks = this.codeFoldingManager.parseProceduresAndFunctions();
@@ -3061,6 +3364,7 @@ class FileViewer {
       if (blocks.length === 0) {
         // No foldable blocks found, cleanup and return
         this.codeFoldingManager = null;
+        this.updateLineNumbersGutter(); // reset gutter — reveal all line numbers
         this.collapseAllBtn.style.display = 'none';
         this.expandAllBtn.style.display = 'none';
         return;
@@ -3095,6 +3399,31 @@ class FileViewer {
         this.codeFoldingManager = null;
       }
     }
+  }
+
+  /**
+   * Updates the line numbers gutter to reflect current fold state.
+   * Called via callback from CodeFoldingManager after each collapse/expand.
+   */
+  updateLineNumbersGutter() {
+    const gutter = this.contentEl.querySelector('.line-numbers-gutter');
+    if (!gutter) return;
+
+    const spans = Array.from(gutter.querySelectorAll('.line-number'));
+    // Reset: show all line numbers
+    spans.forEach(span => { span.style.display = ''; });
+
+    if (!this.codeFoldingManager) return;
+
+    // Hide numbers for lines hidden by folding (including trailing empty lines)
+    this.codeFoldingManager.foldableBlocks.forEach(block => {
+      if (block.collapsed) {
+        const endLine = block.collapsedEndLine ?? block.endLine;
+        for (let i = block.startLine + 1; i <= endLine; i++) {
+          if (spans[i]) spans[i].style.display = 'none';
+        }
+      }
+    });
   }
 
   /**

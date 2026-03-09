@@ -282,27 +282,31 @@
   ];
   const BUILTINS = new Set([...BUILTINS_RU, ...BUILTINS_EN].map((s) => s.toLowerCase()));
 
+  function hasWord(text, pattern) {
+    return new RegExp(`(^|[^\\p{L}\\p{N}_])(?:${pattern})(?=$|[^\\p{L}\\p{N}_])`, "iu").test(text);
+  }
+
   function likelyBSL(text) {
     // Enhanced heuristic for BSL code detection; 2+ triggers
     let score = 0;
 
     // Структура функций и процедур (сильные индикаторы)
-    if (/\b(Процедура|Procedure)\b/i.test(text)) score += 2;
-    if (/\b(Функция|Function)\b/i.test(text)) score += 2;
-    if (/\b(КонецПроцедуры|EndProcedure)\b/i.test(text)) score += 2;
-    if (/\b(КонецФункции|EndFunction)\b/i.test(text)) score += 2;
+    if (hasWord(text, "Процедура|Procedure")) score += 2;
+    if (hasWord(text, "Функция|Function")) score += 2;
+    if (hasWord(text, "КонецПроцедуры|EndProcedure")) score += 2;
+    if (hasWord(text, "КонецФункции|EndFunction")) score += 2;
 
     // Условия и циклы
-    if (/\b(Если|If)\b/i.test(text) && /\b(Тогда|Then)\b/i.test(text)) score++;
-    if (/\b(Для|For)\b/i.test(text) && /\b(Каждого|Each)\b/i.test(text)) score++;
-    if (/\b(Цикл|Do)\b/i.test(text)) score++;
-    if (/\b(КонецЦикла|EndDo)\b/i.test(text)) score++;
+    if (hasWord(text, "Если|If") && hasWord(text, "Тогда|Then")) score++;
+    if (hasWord(text, "Для|For") && hasWord(text, "Каждого|Each")) score++;
+    if (hasWord(text, "Цикл|Do")) score++;
+    if (hasWord(text, "КонецЦикла|EndDo")) score++;
 
     // Типы данных 1С
-    if (/\b(Запрос|Query)\b/i.test(text)) score++;
-    if (/\b(ТаблицаЗначений|ValueTable)\b/i.test(text)) score++;
-    if (/\b(Выборка|Selection)\b/i.test(text)) score++;
-    if (/\b(Соответствие|Map)\b/i.test(text)) score++;
+    if (hasWord(text, "Запрос|Query")) score++;
+    if (hasWord(text, "ТаблицаЗначений|ValueTable")) score++;
+    if (hasWord(text, "Выборка|Selection")) score++;
+    if (hasWord(text, "Соответствие|Map")) score++;
 
     // Атрибуты компиляции
     if (/&\s*На(Клиенте|Сервере|СервереВКлиенте|СервереБезКонтекста)/i.test(text)) score += 2;
@@ -312,8 +316,8 @@
     if (/#(Если|Область|If|Region)\b/i.test(text)) score++;
 
     // Глобальные функции 1С
-    if (/\b(Сообщить|Message|ТекущаяДата|CurrentDate)\b/i.test(text)) score++;
-    if (/\b(СтрДлина|StrLen|СтрНайти|StrFind)\b/i.test(text)) score++;
+    if (hasWord(text, "Сообщить|Message|ТекущаяДата|CurrentDate")) score++;
+    if (hasWord(text, "СтрДлина|StrLen|СтрНайти|StrFind")) score++;
 
     // Даты в формате 1С
     if (/'[0-9]{8}([0-9]{6})?'/.test(text)) score++;
