@@ -29,6 +29,91 @@
       .replace(/'/g, "&" + "#39;");
   }
 
+  function tryParseMarkdownLink(text, startIndex) {
+    if (!text || text[startIndex] !== "[") return null;
+
+    let labelEnd = startIndex + 1;
+    let bracketDepth = 1;
+    while (labelEnd < text.length) {
+      const ch = text[labelEnd];
+      if (ch === "\\") {
+        labelEnd += 2;
+        continue;
+      }
+      if (ch === "[") {
+        bracketDepth++;
+      } else if (ch === "]") {
+        bracketDepth--;
+        if (bracketDepth === 0) break;
+      }
+      labelEnd++;
+    }
+
+    if (bracketDepth !== 0 || text[labelEnd + 1] !== "(") {
+      return null;
+    }
+
+    let urlEnd = labelEnd + 2;
+    let parenDepth = 1;
+    while (urlEnd < text.length) {
+      const ch = text[urlEnd];
+      if (ch === "\\") {
+        urlEnd += 2;
+        continue;
+      }
+      if (ch === "(") {
+        parenDepth++;
+      } else if (ch === ")") {
+        parenDepth--;
+        if (parenDepth === 0) break;
+      }
+      urlEnd++;
+    }
+
+    if (parenDepth !== 0) {
+      return null;
+    }
+
+    const label = text.slice(startIndex + 1, labelEnd);
+    const url = text.slice(labelEnd + 2, urlEnd).trim();
+    if (!/^https?:\/\/[^\s]+$/i.test(url)) {
+      return null;
+    }
+
+    return {
+      endIndex: urlEnd + 1,
+      html: '<a href="' + url + '" target="_blank" rel="noopener noreferrer nofollow">' + label + '</a>'
+    };
+  }
+
+  function renderMarkdownLinks(text) {
+    if (!text) return "";
+
+    let result = "";
+    let cursor = 0;
+
+    while (cursor < text.length) {
+      const startIndex = text.indexOf("[", cursor);
+      if (startIndex === -1) {
+        result += text.slice(cursor);
+        break;
+      }
+
+      result += text.slice(cursor, startIndex);
+      const parsed = tryParseMarkdownLink(text, startIndex);
+      if (!parsed) {
+        result += text[startIndex];
+        cursor = startIndex + 1;
+        continue;
+      }
+
+      result += parsed.html;
+      cursor = parsed.endIndex;
+    }
+
+    return result;
+  }
+
   function render(md) {
     if (!md) return "";
 
@@ -274,11 +359,8 @@
     md = md.replace(/^## (.*)$/gm, "<h2>$1</h2>");
     md = md.replace(/^# (.*)$/gm, "<h1>$1</h1>");
 
-    // 6) Links: [text](https?:\/\/...)
-    md = md.replace(
-      /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
-      '<a href="$2" target="_blank" rel="noopener noreferrer nofollow">$1</a>'
-    );
+    // 6) Links: [text](https://...) with support for nested [] in link text
+    md = renderMarkdownLinks(md);
 
     // 7) Autolinks: bare URLs (not already in markdown links or code)
     md = md.replace(
